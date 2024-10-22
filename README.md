@@ -44,4 +44,11 @@ Here is how you can modify your code to include SHAP values for explaining the m
  *  shap.summary_plot is called to visualize the SHAP values.
  *  This provides insights into feature contributions.
 This setup provides a basic integration of SHAP into your model training process, enabling you to gain insights into how different features affect the model's predictions.
-You can further customize and extend the XAI component based on your specific needs and requirements.  
+You can further customize and extend the XAI component based on your specific needs and requirements.
+
+<div align="center">
+  <a href="https://maazsalman.org/">
+    <img width="50" src="https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/github/github-original.svg" alt="gh" />
+  </a>
+  <p> Explore More! 🚀</p>
+</div>
