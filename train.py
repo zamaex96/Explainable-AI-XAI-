@@ -240,10 +240,41 @@ for epoch in range(EPOCHS):
 
 print("Training Finished.")
 
-# --- Save Model and Results ---
-torch.save(model.state_dict(), SAVED_MODEL_PATH)
-print(f"Model saved to {SAVED_MODEL_PATH}")
+# =========================================================================
+# --- Save Model with Hyperparameters ---
+# =========================================================================
+print(f"\nSaving model checkpoint to {SAVED_MODEL_PATH}...")
 
+# Define the hyperparameters dictionary
+# Use the actual values used during training (from the Configuration section)
+hyperparameters = {
+    'input_size': INPUT_SIZE,
+    'cnn_channels': CNN_CHANNELS,
+    'lstm_hidden_size': LSTM_HIDDEN_SIZE,
+    'lstm_num_layers': LSTM_NUM_LAYERS,
+    'output_size': OUTPUT_SIZE,
+    'num_heads_attention': NUM_HEADS_ATTENTION,
+    'feature_names': FEATURE_NAMES, # Also save feature/class names
+    'class_names': CLASS_NAMES
+}
+
+# Create the checkpoint dictionary
+checkpoint = {
+    'hyperparameters': hyperparameters,
+    'model_state_dict': model.state_dict(),
+    'epoch': epoch + 1, # Save the last epoch number
+    'optimizer_state_dict': optimizer.state_dict(), # Optional: for resuming training
+    'scheduler_state_dict': scheduler.state_dict() # Optional: for resuming training
+}
+
+# Save the checkpoint
+try:
+    torch.save(checkpoint, SAVED_MODEL_PATH)
+    print(f"Model checkpoint saved successfully.")
+except Exception as e:
+    print(f"Error saving model checkpoint: {e}")
+
+# --- Save Training Results (CSV) ---
 train_info = {'epoch': range(1, EPOCHS + 1),
               'train_loss': train_loss_values,
               'train_accuracy': train_accuracy_values,
