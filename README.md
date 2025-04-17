@@ -344,6 +344,254 @@ Here's a breakdown of the script's sections with code snippets and explanations:
 
 This comprehensive script provides a solid template for building, training, and thoroughly analyzing a hybrid deep learning model, placing a strong emphasis on understanding the model's behavior through various explainability techniques.
 
+Okay, let's delve deeper into the three explainability techniques used in the script: SHAP, Grad-CAM, and Attention Weights Visualization.
+
+---
+
+### 1. SHAP (SHapley Additive exPlanations) Analysis
+
+* **Purpose:** SHAP aims to explain the output of *any* machine learning model by assigning an importance value (the "SHAP value") to each **input feature** for a particular prediction. It tells you how much each feature contributed, positively or negatively, to pushing the model's output away from a baseline (average) prediction towards the final prediction for that specific instance. It's based on Shapley values from cooperative game theory, providing a theoretically sound way to distribute the prediction "payout" among the features.
+* **Concept (for DeepExplainer):** Calculating exact Shapley values is computationally infeasible for complex models. `shap.DeepExplainer` (used here as it's suitable for neural networks) provides an efficient approximation. It combines ideas from DeepLIFT (another attribution method using backpropagation) and Shapley values. It requires a **background dataset** to represent the expected distribution of features, which helps estimate the baseline prediction (the "expected value" or `explainer.expected_value`). The SHAP values are calculated by comparing the model's output when a feature is present versus when it's "absent" (approximated using the background data), considering all possible feature orderings or subsets (approximated efficiently).
+* **Step-by-Step Implementation (from the script):**
+
+    1.  **Select Background Data:**
+        * **Code:**
+            ```python
+            background_indices = random.sample(range(len(train_dataset)), min(NUM_SHAP_BACKGROUND_SAMPLES, len(train_dataset)))
+            background_data = torch.stack([train_dataset[i][0] for i in background_indices]).to(DEVICE)
+            ```
+        * **Explanation:** A subset of the *training data* is chosen randomly. This data acts as the reference or baseline distribution. `DeepExplainer` uses this to understand the "average" behavior of the model and to simulate the effect of features being "absent" or unobserved when calculating contributions. The number of samples (`NUM_SHAP_BACKGROUND_SAMPLES`) is a trade-off between representativeness and computational cost. The data is stacked into a single tensor and moved to the correct device.
+
+    2.  **Define Model Predictor Wrapper:**
+        * **Code:**
+            ```python
+            def model_predictor(data_tensor):
+                output, _ = model(data_tensor)
+                return output
+            ```
+        * **Explanation:** The `HybridCNNLSTMAttention` model's `forward` method returns `(output, attn_weights)`. However, the SHAP explainer needs a function that takes the input tensor and returns *only* the tensor representing the model's predictions (logits in this case). This wrapper function serves exactly that purpose, discarding the attention weights.
+
+    3.  **Instantiate Explainer:**
+        * **Code:**
+            ```python
+            explainer = shap.DeepExplainer(model_predictor, background_data)
+            ```
+        * **Explanation:** Creates the `DeepExplainer` object, providing it with the wrapped model function (`model_predictor`) and the prepared background data tensor.
+
+    4.  **Select Test Samples to Explain:**
+        * **Code:**
+            ```python
+            test_indices = random.sample(range(len(test_dataset)), min(NUM_SAMPLES_TO_EXPLAIN * 5, len(test_dataset))) # Get more samples for summary
+            test_samples = torch.stack([test_dataset[i][0] for i in test_indices]).to(DEVICE)
+            # ... (get corresponding labels if needed) ...
+            ```
+        * **Explanation:** A subset of the *test data* is selected for explanation. More samples might be selected than strictly needed for individual force plots (`NUM_SAMPLES_TO_EXPLAIN`) to provide a better basis for the summary plots.
+
+    5.  **Calculate SHAP Values:**
+        * **Code:**
+            ```python
+            shap_values = explainer.shap_values(test_samples)
+            ```
+        * **Explanation:** This is the core computation. The explainer calculates SHAP values for each feature, for each selected test sample, and for each output class. The output `shap_values` is typically a list, where `shap_values[i]` is a NumPy array containing the SHAP values for the i-th class. Each array has the shape `(num_test_samples, num_features)`.
+
+    6.  **Generate Summary Plots:**
+        * **Code (Bar Plot - Global Importance):**
+            ```python
+            shap.summary_plot(shap_values, test_samples.cpu().numpy(), feature_names=FEATURE_NAMES,
+                              class_names=CLASS_NAMES, plot_type="bar", max_display=10)
+            # ... (title, save, show) ...
+            ```
+        * **Explanation (Bar Plot):** Aggregates importance across all classes and samples by taking the mean absolute SHAP value for each feature. The resulting bar chart shows the top `max_display` features ranked by their overall impact on the model's predictions.
+        * **Code (Dot Plot - Per-Class Importance):**
+            ```python
+            for i, class_name in enumerate(CLASS_NAMES):
+                plt.figure()
+                shap.summary_plot(shap_values[i], test_samples.cpu().numpy(), feature_names=FEATURE_NAMES,
+                                  show=False, max_display=10)
+                # ... (title, save, close) ...
+            ```
+        * **Explanation (Dot Plot):** This plot is generated *per class*. For each feature (y-axis), it plots a point for each sample. The point's position on the x-axis represents the SHAP value (impact on that class's prediction), and its color represents the original value of that feature (high/low). This reveals not just *which* features are important for a class, but also *how* their values influence the prediction (e.g., high values of Feature_3 tend to increase the prediction score for Class_1).
+
+    7.  **Generate Force Plots (Individual Explanations):**
+        * **Code:**
+            ```python
+            # ... (get base_values = explainer.expected_value) ...
+            # ... (loop through selected indices_to_plot) ...
+            if base_values is not None and len(base_values) == OUTPUT_SIZE:
+                shap.force_plot(base_values[predicted_label], # Base value for the predicted class
+                                shap_values[predicted_label][i,:], # SHAP values for this sample & predicted class
+                                test_samples_np[i,:], # Feature values for this sample
+                                feature_names=FEATURE_NAMES,
+                                matplotlib=True, show=False)
+                # ... (title, save, close) ...
+            # ... (optional: plot for true_label if different) ...
+            ```
+        * **Explanation:** For a single prediction:
+            * `base_value`: The average prediction score for that class across the background dataset (`explainer.expected_value[predicted_label]`).
+            * `shap_values[...]`: The SHAP values calculated for this specific sample (`i`) and the class of interest (`predicted_label`).
+            * `test_samples_np[i,:]`: The actual feature values for this sample.
+            * The plot visualizes features as forces pushing the output from the `base_value` towards the final prediction score. Red features push the score higher (increase probability of that class), blue features push it lower. The size of the feature's block indicates the magnitude of its impact. `matplotlib=True` allows saving the plot. Plotting for both the predicted and true (if different) classes helps understand misclassifications.
+
+---
+
+### 2. Grad-CAM (Gradient-weighted Class Activation Mapping)
+
+* **Purpose:** Grad-CAM is designed to produce a coarse localization map highlighting the important regions *in the input space or feature maps of a CNN* that the model used to predict a specific target class. It answers: "Which parts of the sequence (as seen by the target CNN layer) were most important for deciding on class Y?". It's specific to Convolutional Neural Networks.
+* **Concept:** It leverages the spatial information preserved in the feature maps of convolutional layers.
+    1.  It calculates the gradient of the score for the target class with respect to the feature maps of a chosen (usually the last) convolutional layer. These gradients indicate how much a change in each feature map channel affects the class score.
+    2.  It computes the average of these gradients across the spatial dimensions (global average pooling) for each channel. This gives a weight (importance score, `alpha_k`) for each feature map channel.
+    3.  It computes a weighted combination of the forward activation feature maps, using the channel importance weights (`alpha_k`) derived from the gradients.
+    4.  It applies a ReLU function to this combination. This focuses on features that have a *positive* influence on the class of interest. The result is a heatmap indicating regions the CNN focused on for that class prediction.
+* **Step-by-Step Implementation (from the script):**
+
+    1.  **Model Hooks Setup:**
+        * **Code (in `__init__`):**
+            ```python
+            self.feature_maps = None
+            self.gradients = None
+            def activations_hook(self, grad):
+                self.gradients = grad
+            ```
+        * **Code (in `forward`):**
+            ```python
+            # Hook applied to the output of the last CNN activation
+            if self.training is False and x_cnn.requires_grad:
+                h = x_cnn.register_hook(self.activations_hook) # Register hook to capture gradient
+                self.feature_maps = x_cnn # Store the activation map itself
+            ```
+        * **Explanation:** The `activations_hook` function is defined to simply store the gradient that flows back into the layer it's attached to. In the `forward` pass (only during evaluation when gradients might be needed for explanation), this hook is registered to the tensor `x_cnn` (output of the last CNN layer block). The activation tensor `x_cnn` itself is also stored in `self.feature_maps`. When `loss.backward()` (or specifically `output[:, target_class_index].backward()`) is called later, PyTorch calculates gradients, and the hook automatically saves the gradient flowing into `x_cnn` into `self.gradients`.
+
+    2.  **`get_grad_cam` Function:**
+        * **Code:**
+            ```python
+            def get_grad_cam(model, target_layer_output, target_class_index, output):
+                if model.gradients is None or target_layer_output is None: return None # Check if hooks worked
+                # Backpropagate the specific class score:
+                output[:, target_class_index].backward(retain_graph=True)
+                gradients = model.gradients # Shape: [batch, channels, seq_len]
+                activations = target_layer_output # Shape: [batch, channels, seq_len]
+
+                # Pool gradients (alpha_k calculation):
+                pooled_gradients = torch.mean(gradients, dim=[2]) # Shape: [batch, channels]
+
+                # Weight the channels (importance weighting):
+                pooled_gradients = pooled_gradients.unsqueeze(-1) # Shape: [batch, channels, 1] for broadcasting
+                heatmap = torch.sum(activations * pooled_gradients, dim=1) # Shape: [batch, seq_len]
+                heatmap = F.relu(heatmap) # Apply ReLU
+
+                # Normalize:
+                # ... (normalization code) ...
+                return heatmap.squeeze().cpu().numpy()
+            ```
+        * **Explanation:**
+            * Takes the model, the captured feature maps (`target_layer_output` which is `model.feature_maps`), the index of the class to explain, and the model's final output tensor.
+            * `output[:, target_class_index].backward(retain_graph=True)`: This is the key step to get gradients *relevant to the target class*. It backpropagates *only* from the score of the desired class. `retain_graph=True` might be needed if you perform multiple backward passes (e.g., explaining multiple classes for the same input).
+            * Retrieves `gradients` and `activations` stored by the hooks.
+            * `torch.mean(gradients, dim=[2])`: Calculates the importance weight (`alpha_k`) for each channel by averaging the gradient values across the sequence dimension (dimension 2).
+            * `activations * pooled_gradients`: Weights the activation maps channel-wise using the importance weights (broadcasting handles the dimensions).
+            * `torch.sum(..., dim=1)`: Sums the weighted channels to create the raw heatmap (collapsing the channel dimension).
+            * `F.relu(heatmap)`: Keeps only positive contributions.
+            * Normalization: Scales the heatmap values to be between 0 and 1 for easier visualization.
+            * Returns the heatmap as a NumPy array.
+
+    3.  **Visualization Loop:**
+        * **Code:**
+            ```python
+            for i, sample_idx in enumerate(grad_cam_indices):
+                input_tensor = grad_cam_samples[i].unsqueeze(0)
+                input_tensor.requires_grad = True # CRITICAL for gradient calculation
+                model.zero_grad() # Clear any stale gradients
+
+                # Forward pass to get output AND trigger hooks
+                output, _ = model(input_tensor)
+                predicted_class = torch.argmax(output, dim=1).item()
+
+                # Calculate Grad-CAM (includes backward pass inside)
+                heatmap = get_grad_cam(model, model.feature_maps, predicted_class, output)
+
+                if heatmap is not None:
+                    # Upsample heatmap to original input size
+                    heatmap_tensor = torch.tensor(heatmap).unsqueeze(0).unsqueeze(0)
+                    upsampled_heatmap = F.interpolate(heatmap_tensor, size=INPUT_SIZE, mode='linear', align_corners=False)
+                    upsampled_heatmap = upsampled_heatmap.squeeze().numpy()
+
+                    # Plotting
+                    plt.figure(...)
+                    original_data = input_tensor.squeeze().detach().cpu().numpy()
+                    plt.plot(original_data, ...)
+                    plt.imshow(upsampled_heatmap[np.newaxis, :], cmap='viridis', aspect='auto', alpha=0.5,
+                               extent=[0, INPUT_SIZE -1, np.min(original_data)-0.1, np.max(original_data)+0.1])
+                    # ... (colorbar, title, save, show) ...
+
+                # Clean up
+                model.gradients = None
+                model.feature_maps = None
+                input_tensor.requires_grad = False
+            ```
+        * **Explanation:**
+            * Iterates through selected test samples.
+            * Sets `requires_grad=True` on the input tensor because we need to compute gradients *from* the output *back towards* the intermediate CNN layer via the input.
+            * `model.zero_grad()` ensures gradients from previous iterations don't interfere.
+            * The `model(input_tensor)` call performs the forward pass, which gets the prediction *and* triggers the hooks to store `model.feature_maps`.
+            * `get_grad_cam(...)` is called. Inside this function, the `backward()` call triggers the gradient calculation and the storage of `model.gradients` via the hook.
+            * **Upsampling:** The calculated `heatmap` has a length corresponding to the sequence length *after* the CNN pooling layers (`cnn_output_seq_len`). To visualize it relative to the original input features (length `INPUT_SIZE`), `F.interpolate` is used to resize the heatmap linearly.
+            * **Plotting:** The original feature sequence is plotted. The `upsampled_heatmap` is plotted *over* it using `plt.imshow`. `aspect='auto'` stretches the heatmap horizontally. `alpha=0.5` makes it semi-transparent. `extent` is crucial: `[0, INPUT_SIZE - 1, y_min, y_max]` tells `imshow` to map the heatmap columns to the range 0 to `INPUT_SIZE - 1` on the x-axis (aligning with the feature plot) and adjusts the y-limits for visual clarity.
+            * **Cleanup:** Resetting hooks and `requires_grad` prevents potential issues in subsequent iterations or model uses.
+
+---
+
+### 3. Attention Weights Visualization
+
+* **Purpose:** To visualize the internal mechanism of the Attention layer itself. In this model, it's a `MultiheadAttention` layer operating on the sequence output by the LSTM. Visualizing the weights shows which elements (time steps or positions) in the LSTM output sequence the attention mechanism focused on *relative to other elements* when computing the weighted representation (`attn_output`) that gets aggregated into the `context_vector`. For self-attention, it answers "How much did sequence element *i* attend to sequence element *j*?".
+* **Concept:** Attention mechanisms compute scores indicating the relevance between elements. For self-attention (`query`, `key`, and `value` all come from the same sequence), the layer calculates how much each position ("query") should pay attention to every other position including itself ("key"). These scores are typically normalized (e.g., via Softmax) to become weights that sum to 1 for each query position. A higher weight means higher attention/focus. Visualizing these weights as a matrix (heatmap) reveals these focus patterns.
+* **Step-by-Step Implementation (from the script):**
+
+    1.  **Get Attention Weights:**
+        * **Code:**
+            ```python
+            with torch.no_grad(): # No gradients needed for this
+                output, attn_weights = model(input_tensor)
+            # attn_weights shape likely [batch, seq_len_after_cnn, seq_len_after_cnn]
+            # or [batch, num_heads, seq_len_after_cnn, seq_len_after_cnn]
+            ```
+        * **Explanation:** The model's `forward` pass is executed within `torch.no_grad()` as only the forward output (specifically `attn_weights`) is needed. The `attn_weights` tensor is directly returned by the `model`. *Note:* The exact shape depends on the `nn.MultiheadAttention` implementation details and how it's used. The script assumes the weights available for visualization are shaped `[batch, seq_len, seq_len]`. If `num_heads > 1`, the script implicitly either uses an attention layer that averages heads internally or it might be visualizing only one head or an average (though the averaging code is commented out in the model definition but might be intended). Let's proceed assuming `attn_weights` has the shape `[batch, seq_len, seq_len]`.
+
+    2.  **Process Weights:**
+        * **Code:**
+            ```python
+            if attn_weights is not None:
+                # Squeeze batch dim, move to CPU, convert to NumPy
+                attn_map = attn_weights.squeeze(0).cpu().numpy() # Shape: [seq_len, seq_len]
+            ```
+        * **Explanation:** Checks if weights were returned. `squeeze(0)` removes the batch dimension (assuming batch size 1 for individual explanation). `.cpu().numpy()` moves the tensor off the GPU (if used) and converts it to a NumPy array suitable for plotting libraries like Seaborn/Matplotlib. The resulting `attn_map` is a 2D array where `attn_map[i, j]` represents the attention paid by query step `i` to key step `j`.
+
+    3.  **Visualize Heatmap:**
+        * **Code:**
+            ```python
+            plt.figure(figsize=(7, 6))
+            sns.heatmap(attn_map, cmap="viridis", cbar=True)
+            plt.title(f'Attention Map for Sample {sample_idx} (Predicted: {CLASS_NAMES[predicted_class]})')
+            plt.xlabel('Key Time Steps (CNN Output Sequence)')
+            plt.ylabel('Query Time Steps (CNN Output Sequence)')
+            plt.savefig(f"attention_map_sample_{sample_idx}.png")
+            plt.show()
+            ```
+        * **Explanation:**
+            * `seaborn.heatmap` is used to plot the 2D `attn_map`.
+            * The y-axis represents the "query" positions (the position generating the attention context).
+            * The x-axis represents the "key" positions (the positions being attended to).
+            * Both axes correspond to the sequence length *after* the CNN layers (i.e., the input sequence to the attention layer).
+            * Brighter colors indicate higher attention weights. A bright diagonal might indicate strong self-attention. Off-diagonal bright spots show attention paid to other positions in the sequence. Different patterns (e.g., focus on early/late steps, specific relative positions) can reveal how the model integrates information across the sequence.
+
+---
+
+In summary:
+* **SHAP:** Explains prediction based on **input features**. Answers "Which input features mattered most?".
+* **Grad-CAM:** Explains prediction based on **CNN spatial focus**. Answers "Where did the CNN look?".
+* **Attention Viz:** Explains prediction based on **Attention layer's internal weighting**. Answers "Which parts of the sequence representation did the Attention layer focus on?".
+
+  
+
 <div align="center">
   <a href="https://maazsalman.org/">
     <img width="70" src="click-svgrepo-com.svg" alt="gh" />
