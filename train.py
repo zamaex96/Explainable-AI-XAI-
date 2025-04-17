@@ -572,3 +572,70 @@ for i, sample_idx in enumerate(attn_indices):
 
 
 print("\nExplainability Analysis Complete.")
+
+
+# =========================================================================
+# --- Example: Loading the Model ---
+# =========================================================================
+print("\n--- Loading Model Example ---")
+
+# Check if the saved model file exists
+if os.path.exists(SAVED_MODEL_PATH):
+    # Load the checkpoint dictionary
+    # Use map_location to load onto the correct device (especially if saved on GPU and loading on CPU)
+    checkpoint = torch.load(SAVED_MODEL_PATH, map_location=DEVICE)
+    print(f"Checkpoint loaded from {SAVED_MODEL_PATH}")
+
+    # Extract hyperparameters
+    loaded_hyperparameters = checkpoint['hyperparameters']
+    print("Loaded Hyperparameters:", loaded_hyperparameters)
+
+    # Instantiate model with loaded hyperparameters
+    # Make sure the names match exactly ('num_heads' vs 'num_heads_attention')
+    loaded_model = HybridCNNLSTMAttention(
+        input_size=loaded_hyperparameters['input_size'],
+        cnn_channels=loaded_hyperparameters['cnn_channels'],
+        lstm_hidden_size=loaded_hyperparameters['lstm_hidden_size'],
+        lstm_num_layers=loaded_hyperparameters['lstm_num_layers'],
+        output_size=loaded_hyperparameters['output_size'],
+        num_heads=loaded_hyperparameters['num_heads_attention'] # Key used during saving
+    )
+    print("Model architecture reconstructed from hyperparameters.")
+
+    # Load the state dict
+    loaded_model.load_state_dict(checkpoint['model_state_dict'])
+    loaded_model.to(DEVICE)
+    loaded_model.eval() # Set to evaluation mode immediately after loading
+    print("Model weights loaded successfully.")
+
+    # Optional: Load optimizer and scheduler states if needed for resuming training
+    # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    # scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    # print("Optimizer and Scheduler states loaded.")
+
+    # --- Test loaded model with a sample ---
+    try:
+        # Get a sample from the test dataset
+        sample_input, sample_label = test_dataset[0]
+        sample_input = sample_input.unsqueeze(0).to(DEVICE) # Add batch dim and move to device
+
+        with torch.no_grad():
+            # Use the loaded model for prediction
+            prediction_output, _ = loaded_model(sample_input)
+            predicted_class_idx = torch.argmax(prediction_output, dim=1).item()
+
+            # Get class names from loaded hyperparameters if available
+            loaded_class_names = loaded_hyperparameters.get('class_names', [f"Class_{i}" for i in range(loaded_hyperparameters['output_size'])])
+            predicted_class_name = loaded_class_names[predicted_class_idx]
+            true_class_name = loaded_class_names[sample_label.item()]
+
+            print(f"\nTesting loaded model on sample 0:")
+            print(f"  True Class: {true_class_name} ({sample_label.item()})")
+            print(f"  Predicted Class: {predicted_class_name} ({predicted_class_idx})")
+            print(f"  Prediction successful!")
+
+    except Exception as e:
+        print(f"Error during loaded model test prediction: {e}")
+
+else:
+    print(f"Error: Saved model file not found at {SAVED_MODEL_PATH}. Cannot load.")
