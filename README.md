@@ -1,4 +1,7 @@
-*XAI of Hybrid CNN LSTM with Atttention*
+# XAI of Hybrid CNN LSTM with Attention
+
+## Project Objectives: Classification and Explanation
+
 **Purpose and Goal**
 
 The primary purpose of this script is to build, train, evaluate, and *explain* a hybrid deep learning model for a classification task. The model combines Convolutional Neural Networks (CNNs), Long Short-Term Memory networks (LSTMs), and an Attention mechanism.
