@@ -67,7 +67,7 @@ except AttributeError:
     CLASS_NAMES = [f"Class_{i}" for i in range(OUTPUT_SIZE)]
 
 
-# --- Improved Model with Attention ---
+# --- Model with Attention ---
 class HybridCNNLSTMAttention(nn.Module):
     def __init__(self, input_size, cnn_channels, lstm_hidden_size, lstm_num_layers, output_size, num_heads):
         super(HybridCNNLSTMAttention, self).__init__()
